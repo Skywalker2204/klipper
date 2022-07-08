@@ -50,7 +50,10 @@ class FilamentLoading:
             speed = self.short_moves_speed
             accel = self.short_moves_accel
         self.gcode.respond_info("Force Move")
-        command_string = ('FORCE_MOVE STEPPER="{}" DISTANCE={:.2f} VELOCITY={:.2f} ACCEL={:.2f}'.format(self.loader_stepper, dist, speed, accel))
+        command_string = ('FORCE_MOVE STEPPER="{}" '\
+                          'DISTANCE={:.2f} VELOCITY={:.2f} '\
+                              'ACCEL={:.2f}'.format(self.loader_stepper, 
+                                                    dist, speed, accel))
         self.gcode.run_script_from_command(command_string)
         
     def _check_sensor(self, sensor_name):
@@ -58,6 +61,17 @@ class FilamentLoading:
                                             sensor_name)
         self.gcode.respond_info("check Sensor")
         return bool(sensor.runout_helper.filament_present)
+    
+    def _check_extruder(self, ext):
+        active_extruder=(self.toohead.get_status()['extruder']==ext)
+        if not active_extruder:
+            cmd='T{}'.format(ext[-1] if ext[-1].isnumeric() else '0')
+            self.gcode.run_script_from_command(cmd)
+            self.gcode.respond_info("Activate extruder= "+ext)
+            active_extruder=True
+        extruder=self.printer.lookup_object(ext)
+        can_extruder=extruder.get_status()['can_extrude']
+        return (active_extruder and can_extruder)
     
     def _load_toolhead(self, num_retry=3):      
         if (self.loader_sensor_name and 
@@ -84,7 +98,7 @@ class FilamentLoading:
                 "G1 E{:.2f} F{:.2f}".format(dist, sp))
             self.toolhead.wait_moves()
             
-    def _unload_filament(self, num_retry):
+    def _unload_filament(self, num_retry, ext):
         if (self.loader_sensor_name and 
            not self._check_sensor(self.loader_sensor_name)):
             self.gcode._respond_error('No filament detected!')
@@ -92,11 +106,11 @@ class FilamentLoading:
         i = 0
         self.gcode.respond_info("Before while")
         while self._check_sensor(self.toolhead_sensor_name):
-            try:
+            if self._check_extruder(ext):
                 self.gcode.run_script_from_command(
                     "G1 E{:.2f} F500".format(self.extrude))
                 self.toolhead.wait_moves()
-            except:
+            else:
                 self.gcode._respond_error('Prevent Cold Extrusion')
                 return False
             if i >= num_retry:
@@ -111,18 +125,18 @@ class FilamentLoading:
     def cmd_LOAD_FILAMENT(self, gcmd):
         num = gcmd.get_int('RETRY', 3)
         ext = gcmd.get('EXTRUDER')
-        self.gcode.respond_info('Extruder =' + ext)
         if self._load_toolhead(num):
-            try:
+            if self._check_extruder(ext):
                 self._load_to_nozzle()
                 self.gcode.respond_info('Filament loading succesfull')
-            except:
+            else:
                 self.gcode.respond_info(
                     'No cold Extrusion, heat up extruder and finish loading manual')  
                 
     def cmd_UNLOAD_FILAMENT(self, gcmd):
         num = gcmd.get_int('RETRY', 3)
-        if self._unload_filament(num):
+        ext = gcmd.get('EXTRUDER')
+        if self._unload_filament(num, ext):
             self.gcode.respond_info('Filament unloading succesfull')
                
 def load_config_prefix(config):
