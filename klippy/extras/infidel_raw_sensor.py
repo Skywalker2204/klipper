@@ -9,7 +9,7 @@ ADC_REPORT_TIME = 0.500
 ADC_SAMPLE_TIME = 0.03
 ADC_SAMPLE_COUNT = 15
 
-class InFiDEL:
+class INFIDEL:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
@@ -35,6 +35,7 @@ class InFiDEL:
         # filament array [position, filamentWidth]
         self.filament_array = []
         self.lastFilamentWidthReading = 0
+        self.firstExtruderUpdatePosition = 0
         self.filament_width = self.nominal_filament_dia
         # printer objects
         self.toolhead = self.ppins = self.mcu_adc = None
@@ -70,7 +71,8 @@ class InFiDEL:
         self.toolhead = self.printer.lookup_object('toolhead')
 
         # Start extrude factor update timer
-        self.reactor.update_timer(self.extrude_factor_update_timer,
+        if self.is_active:
+            self.reactor.update_timer(self.extrude_factor_update_timer,
                                   self.reactor.NOW)
 
     def adc_callback(self, read_time, read_value):
@@ -83,12 +85,12 @@ class InFiDEL:
         table = self.lookUpTable
         dia = 0
         for i, entry in enumerate(table[1:]):
-            if entry[0] > lastReading and lastReading > table[i][0]:
+            if entry[0] >= lastReading  >= table[i][0]:
                 dia = (((entry[1] - table[i][1]) / (entry[0] - table[i][0])) *
                         (lastReading - table[i][0]) + table[i][1])
         return dia
 
-    def _update_filament_array(self, last_epos):
+    def update_filament_array(self, last_epos):
         # Fill array
         if len(self.filament_array) > 0:
             # Get last reading position in array & calculate next
@@ -107,6 +109,12 @@ class InFiDEL:
                                         self.diameter])
             self.firstExtruderUpdatePosition = (self.measurement_delay
                                                 + last_epos)
+            if self.is_log:
+                self.gcode.respond_info("Fist Extruder position: %.1f" %
+                                         self.firstExtruderUpdatePosition)
+                self.gcode.respond_info("Current Extruder Position: %.1f" %
+                                          last_epos)
+
 
     def extrude_factor_update_event(self, eventtime):
         # Update extrude factor
@@ -126,7 +134,7 @@ class InFiDEL:
                     # Get first item in filament_array queue
                     item = self.filament_array.pop(0)
                     self.filament_width = item[1]
-                else:
+                elif  self.firstExtruderUpdatePosition == pending_position:
                     self.filament_width = self.nominal_filament_dia
                 if (self.min_diameter <= self.filament_width
                     <= self.max_diameter):
@@ -156,6 +164,11 @@ class InFiDEL:
     def cmd_ClearFilamentArray(self, gcmd):
         self.filament_array = []
         gcmd.respond_info("Filament width measurements cleared!")
+        # Set extruder position to 0
+        #toolhead = self.printer.lookup_object('toolhead')
+        #toolhead.get_last_move_time()
+        #curpos = toolhead.get_position()
+        #toolhead.set_position([curpos[0],curpos[1],curpos[2],0], homing_axes=(0, 1, 2))
         # Set extrude multiplier to 100%
         self.gcode.run_script_from_command("M221 S100")
 
@@ -206,4 +219,4 @@ class InFiDEL:
         gcmd.respond_info("Filament width logging Turned Off")
 
 def load_config(config):
-    return InFiDEL(config)
+    return INFIDEL(config)
