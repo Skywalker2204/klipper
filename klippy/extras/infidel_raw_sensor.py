@@ -48,6 +48,8 @@ class INFIDEL:
         # extrude factor updating
         self.extrude_factor_update_timer = self.reactor.register_timer(
             self.extrude_factor_update_event)
+        self.current_width_update_timer = self.reactor.register_timer(
+            self.current_width_update_event)
         # Register commands
         self.gcode = self.printer.lookup_object('gcode')
         self.gcode.register_command('QUERY_FILAMENT_WIDTH', self.cmd_M407)
@@ -73,6 +75,9 @@ class INFIDEL:
         # Start extrude factor update timer
         if self.is_active:
             self.reactor.update_timer(self.extrude_factor_update_timer,
+                                  self.reactor.NOW)
+        else:
+            self.reactor.update_timer(self.current_width_update_timer,
                                   self.reactor.NOW)
 
     def adc_callback(self, read_time, read_value):
@@ -114,7 +119,16 @@ class INFIDEL:
                                          self.firstExtruderUpdatePosition)
                 self.gcode.respond_info("Current Extruder Position: %.1f" %
                                           last_epos)
-
+    
+    def current_width_update_event(self, last_epos):
+        # Get first position in filament array
+        pending_position = self.filament_array[0][0]
+        if pending_position <= last_epos:
+            # Get first item in filament_array queue
+            item = self.filament_array.pop(0)
+            self.filament_width = item[1]
+        elif  self.firstExtruderUpdatePosition == pending_position:
+            self.filament_width = self.nominal_filament_dia
 
     def extrude_factor_update_event(self, eventtime):
         # Update extrude factor
@@ -128,14 +142,7 @@ class INFIDEL:
         # Does filament exists
         if self.diameter > 0.5:
             if len(self.filament_array) > 0:
-                # Get first position in filament array
-                pending_position = self.filament_array[0][0]
-                if pending_position <= last_epos:
-                    # Get first item in filament_array queue
-                    item = self.filament_array.pop(0)
-                    self.filament_width = item[1]
-                elif  self.firstExtruderUpdatePosition == pending_position:
-                    self.filament_width = self.nominal_filament_dia
+                self.current_width_update_event(last_epos)
                 if (self.min_diameter <= self.filament_width
                     <= self.max_diameter):
                     percentage = round(self.nominal_filament_dia**2
@@ -148,6 +155,18 @@ class INFIDEL:
             self.filament_array = []
 
         if self.is_active:
+            return eventtime + 1
+        else:
+            return self.reactor.NEVER
+        
+    def current_width_update_event(self, eventtime):
+        #is running as a standby to still log the current width 
+        pos = self.toolhead.get_position()
+        last_epos = pos[3]
+        if self.diameter > 0.5:
+            if len(self.filament_array) > 0:
+                self.update_current_width(last_epos)
+        if not self.is_active:
             return eventtime + 1
         else:
             return self.reactor.NEVER
